@@ -1,0 +1,957 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KrediYA - AI Productivity System</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        :root { 
+            color-scheme: light; 
+            --calendar-border: #e2e8f0; /* slate-200 */
+            --calendar-bg-primary: #ffffff; /* white */
+            --calendar-bg-secondary: #f8fafc; /* slate-50 */
+            --calendar-bg-today: #f0f9ff; /* sky-50 */
+            --calendar-text-muted: #94a3b8; /* slate-400 */
+        }
+        html.dark { 
+            color-scheme: dark; 
+            --calendar-border: #334155; /* slate-700 */
+            --calendar-bg-primary: #0f172a; /* slate-900 */
+            --calendar-bg-secondary: #1e293b; /* slate-800 */
+            --calendar-bg-today: #1e3a8a; /* blue-900/50 */
+            --calendar-text-muted: #64748b; /* slate-500 */
+        }
+        body { font-family: 'Inter', sans-serif; }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        
+        .animate-in { animation: animate-in 0.3s ease-out forwards; }
+        @keyframes animate-in {
+            from { opacity: 0; transform: scale(0.95); }
+            to { opacity: 1; transform: scale(1); }
+        }
+        @media print {
+            body * { visibility: hidden; }
+            #report-output-container, #report-output-container * { visibility: visible; }
+            #report-output-container { position: absolute; left: 0; top: 0; width: 100%; padding: 1rem; }
+            .no-print { display: none; }
+        }
+        .whitespace-pre-wrap { white-space: pre-wrap; word-wrap: break-word; }
+        
+        /* 🚀 --- ESTILOS DEL CALENDARIO (CORRECCIÓN FINAL DE GRID) --- 🚀 */
+        .calendar-grid { 
+            display: grid; 
+            grid-template-columns: repeat(7, 1fr); 
+            border: 1px solid var(--calendar-border); 
+            border-radius: 0.5rem; 
+            overflow: hidden;
+        }
+        .calendar-header { 
+            text-align: center; 
+            font-size: 0.75rem; 
+            font-weight: 600; 
+            padding: 0.5rem 0.25rem; 
+            background-color: var(--calendar-bg-secondary); 
+            border-bottom: 1px solid var(--calendar-border);
+            border-right: 1px solid var(--calendar-border);
+        }
+        /* Eliminar el borde derecho del último día de la semana */
+        .calendar-grid > .calendar-header:nth-child(7n) {
+            border-right: none;
+        }
+
+        .calendar-day { 
+            position: relative; 
+            min-height: 120px; 
+            padding: 0.5rem; 
+            background-color: var(--calendar-bg-primary); 
+            overflow: hidden;
+            border-right: 1px solid var(--calendar-border);
+            border-bottom: 1px solid var(--calendar-border); 
+        }
+        /* Eliminar borde derecho de las celdas del domingo (última columna) */
+        .calendar-grid > .calendar-day:nth-child(7n) {
+            border-right: none;
+        }
+        /* Eliminar borde inferior de la última fila */
+        .calendar-grid > .calendar-day:nth-last-child(-n+7) {
+            border-bottom: none;
+        }
+        /* Asegurar que las celdas de días anteriores/siguientes tengan el color correcto */
+        .calendar-day-other { background-color: var(--calendar-bg-secondary); }
+        .calendar-day-today { background-color: var(--calendar-bg-today); }
+        
+        /* Estilos de número */
+        .calendar-day-number { 
+            font-size: 0.75rem; 
+            font-weight: 500; 
+            cursor: pointer; 
+            color: var(--calendar-text-muted);
+        }
+        .calendar-day:not(.calendar-day-other) .calendar-day-number { 
+            color: #334155;
+        }
+        html.dark .calendar-day:not(.calendar-day-other) .calendar-day-number { 
+            color: #e2e8f0;
+        }
+        .calendar-day-number-today { 
+            background-color: #0c4a6e; 
+            color: white; 
+            border-radius: 9999px; 
+            width: 1.5rem; 
+            height: 1.5rem; 
+            display: inline-flex; 
+            align-items: center; 
+            justify-content: center; 
+        }
+        /* Estilos de actividades */
+        .calendar-activity { 
+            display: block; 
+            font-size: 0.75rem; 
+            padding: 0.125rem 0.375rem; 
+            border-radius: 0.25rem; 
+            margin-top: 0.25rem; 
+            overflow: hidden; 
+            text-overflow: ellipsis; 
+            white-space: nowrap; 
+            cursor: pointer; 
+        }
+        .avatar-img { width: 40px; height: 40px; border-radius: 9999px; object-fit: cover; border: 2px solid white; display: inline-flex; align-items: center; justify-content: center; font-weight: 600; font-size: 0.875rem; color: white; }
+    </style>
+</head>
+<body class="bg-slate-50 dark:bg-slate-950">
+    <div id="app-root"></div>
+    <div id="toast" class="hidden fixed bottom-5 right-5 bg-blue-600 text-white py-2 px-4 rounded-lg shadow-lg animate-in"></div>
+
+    <script src="https://www.gstatic.com/firebasejs/12.5.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/12.5.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/12.5.0/firebase-firestore-compat.js"></script>
+
+    <script>
+    (function() { 
+        
+        // ====================================================================================
+        // CONFIGURACIÓN DE FIREBASE
+        // ====================================================================================
+        const firebaseConfig = {
+            apiKey: "AIzaSyD3nuERVdOoYpm1FqGKRERHwuUBuHO7yfU",
+            authDomain: "apk-formacion.firebaseapp.com",
+            databaseURL: "https://apk-formacion-default-rtdb.firebaseio.com",
+            projectId: "apk-formacion",
+            storageBucket: "apk-formacion.firebasestorage.app",
+            messagingSenderId: "354702879031",
+            appId: "1:354702879031:web:90eacefb2ce741ace552b2"
+        };
+        // ====================================================================================
+
+        // --- ICONOS ---
+        const ICONS = {
+            home: `<svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>`,
+            map: `<svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>`,
+            folderKanban: `<svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/><path d="M8 10v4"/><path d="M12 10v2"/><path d="M16 10v6"/></svg>`,
+            barChart3: `<svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>`,
+            users: `<svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`,
+            graduationCap: `<svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>`,
+            sun: `<svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m4.93 19.07 1.41-1.41"/><path d="m17.66 6.34 1.41-1.41"/></svg>`,
+            moon: `<svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>`,
+            wandSparkles: `<svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M13 22 22 2"/><path d="m6 10 3-3"/><path d="m3 3 3 3"/><path d="M18 14 21 11"/></svg>`,
+            clock: `<svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`,
+            store: `<svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m2 7 4.41-4.41A2 2 0 0 1 7.83 2h8.34a2 2 0 0 1 1.42.59L22 7"/><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="M15 22v-4a2 2 0 0 0-2-2h-2a2 2 0 0 0-2 2v4"/><path d="M2 7h20"/><path d="M22 7v3a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7"/></svg>`,
+            checkCircle: `<svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`,
+            x: `<svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`,
+            logOut: `<svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>`,
+            plus: `<svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`,
+            xCircle: `<svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></svg>`,
+            printer: `<svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>`,
+            trash: `<svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>`,
+            archive: `<svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="8" y1="12" x2="16" y2="12"/></svg>`,
+            pencil: `<svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>`,
+            fileDown: `<svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><path d="M12 18v-6"/><path d="m9 15 3 3 3-3"/></svg>`,
+            avatar: `<svg class="w-full h-full text-slate-400" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/></svg>`,
+            calendarPlus: `<svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 13V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h8"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="16" y1="19" x2="22" y2="19"/><line x1="19" y1="16" x2="19" y2="22"/></svg>`,
+            briefcase: `<svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>`,
+            listPlus: `<svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 12H3"/><path d="M16 6H3"/><path d="M16 18H3"/><path d="M18 7v6"/><path d="M21 10h-6"/></svg>` 
+        };
+
+        // --- 🚀 ESTADO DE LA APLICACIÓN ---
+        let state = {
+            user: undefined, 
+            loading: false, 
+            isDarkMode: false,
+            isSidebarOpen: false,
+            activeModal: null,
+            editingItemId: null, 
+            confirmModal: { isOpen: false, title: '', message: '', onConfirm: () => {} },
+            currentPage: 'dashboard',
+            calendarView: 'month', // 🎯 Ajustado a 'month' como vista predeterminada para el calendario
+            currentDate: new Date(), 
+            aiDailySummary: { loading: false, text: null },
+            activitiesToClose: [],
+            allUsers: [],
+            productivityData: [], 
+            routePlan: [], 
+            calculatedStats: [],
+            activeProjects: [], 
+            activities: [], 
+            projectUpdates: [], 
+            currentReportData: null, 
+        };
+
+        // --- REFERENCIAS GLOBALES ---
+        const appRoot = document.getElementById('app-root');
+        let unsubscribers = []; 
+        let db; 
+        let auth; 
+        let userId; 
+
+        // ====================================================================================
+        // FUNCIÓN PRINCIPAL DE RENDERIZADO (Optimizada)
+        // ====================================================================================
+        
+        const render = () => {
+            if (state.user === undefined) { appRoot.innerHTML = LoadingScreen("Iniciando..."); return; }
+            if (state.user === null) { appRoot.innerHTML = LoginScreen(); return; } 
+            if (state.loading) { appRoot.innerHTML = LoadingScreen("Cargando datos..."); return; }
+            
+            updateIndicators(); 
+
+            const { isSidebarOpen, currentPage, isDarkMode, activeModal } = state;
+            appRoot.innerHTML = `
+                <div class="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 font-sans">
+                    <div class="flex">
+                        ${Sidebar(isSidebarOpen, state.user, currentPage)}
+                        <div class="flex-1 flex flex-col min-w-0 h-screen">
+                            ${Header(isDarkMode, currentPage)}
+                            <main class="flex-1 p-4 md:p-6 lg:p-8 overflow-y-auto">${MainContent(currentPage)}</main>
+                        </div>
+                    </div>
+                    ${RegisterVisitModal(activeModal === 'visit')} 
+                    ${ScheduleTrainingModal(activeModal === 'training')}
+                    ${CreateProjectModal(activeModal === 'project')} 
+                    ${OtherActivityModal(activeModal === 'otherActivity')}
+                    ${ConfirmModal(state.confirmModal)}
+                    ${EditProjectModal(activeModal === 'editProject')}
+                    ${EditVisitModal(activeModal === 'editVisit')}
+                    ${EditTrainingModal(activeModal === 'editTraining')}
+                    ${LogActivityModal(activeModal === 'logActivity', state.activeProjects)}
+                    ${CloseDayModal(activeModal === 'closeDay', state.activitiesToClose, state.activeProjects)}
+                    ${LogProjectHoursModal(activeModal === 'logHours', state.activeProjects)}
+                    ${WeekPlannerModal(activeModal === 'weekPlanner')}
+                </div>`;
+        };
+        
+        // ====================================================================================
+        // COMPONENTES DE UI (Funciones que retornan HTML)
+        // ====================================================================================
+
+        const LoadingScreen = (text) => `<div class="fixed inset-0 bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center space-y-4 z-[100]"><div class="w-12 h-12 text-blue-600 animate-pulse">${ICONS.wandSparkles}</div><p class="text-lg font-semibold text-slate-700 dark:text-slate-300">${text}</p></div>`;
+        
+        const LoginScreen = () => `<div class="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center p-4"><div class="flex items-center justify-center mb-8"><div class="w-10 h-10 text-blue-600">${ICONS.wandSparkles}</div><h1 class="text-3xl font-bold ml-3 text-slate-900 dark:text-slate-50">KrediYA</h1></div><div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-sm w-full max-w-sm"><div class="p-4 md:p-6 border-b border-slate-200 dark:border-slate-800"><h2 class="text-xl font-semibold text-center text-slate-900 dark:text-slate-50">Iniciar Sesión</h2></div><form id="login-form" data-action="submit-login"><div class="p-4 md:p-6 space-y-4"><div id="login-error" class="hidden text-sm text-red-500 bg-red-100 dark:bg-red-900/50 p-3 rounded-md"></div><div><label for="email" class="text-sm font-medium text-slate-700 dark:text-slate-300">Correo Electrónico</label><input id="email" name="email" type="email" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-sm text-slate-900 dark:text-slate-50"></div><div><label for="password" class="text-sm font-medium text-slate-700 dark:text-slate-300">Contraseña</label><input id="password" name="password" type="password" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-sm text-slate-900 dark:text-slate-50"></div><button type="submit" id="login-button" class="w-full inline-flex items-center justify-center rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-600/90 h-10 px-4 py-2 disabled:opacity-50">Ingresar</button></div></form></div></div>`;
+        
+        const Avatar = (user) => {
+            if (!user) return `<div class="avatar-img bg-slate-200">${ICONS.avatar}</div>`;
+            const name = user.displayName || user.email;
+            if (user.photoURL) return `<img src="${user.photoURL}" alt="Avatar" class="avatar-img" />`;
+            const initials = (name || '').split(/[\s@]+/).map(s => s[0] || '').slice(0, 2).join('').toUpperCase();
+            const colors = ['bg-red-500', 'bg-green-500', 'bg-blue-500', 'bg-yellow-500', 'bg-indigo-500', 'bg-purple-500', 'bg-pink-500', 'bg-sky-500'];
+            const colorIndex = (user.uid.charCodeAt(0) || 0) % colors.length;
+            return `<div class="avatar-img ${colors[colorIndex]}" title="${name}">${initials || ICONS.avatar.substring(0, 80)}</div>`;
+        }
+
+        const MainContent = (page) => {
+            switch(page) {
+                case 'dashboard': return DashboardPage();
+                case 'route': return RoutePlanPage(); 
+                case 'projects': return ProjectsPage(state.activeProjects);
+                case 'reports': return ReportsPage();
+                case 'teams': return TeamsPage(state.allUsers);
+                default: return PlaceholderPage(page.charAt(0).toUpperCase() + page.slice(1));
+            }
+        };
+        
+        const Sidebar = (isOpen, user, page) => {
+            const navItems = [
+                { id: 'dashboard', name: "Panel de Control", icon: ICONS.home }, 
+                { id: 'route', name: "Plan de Ruta", icon: ICONS.map }, 
+                { id: 'projects', name: "Gestión de Proyectos", icon: ICONS.folderKanban }, 
+                { id: 'reports', name: "Reportes", icon: ICONS.barChart3 }, 
+                { id: 'teams', name: "Equipos", icon: ICONS.users }
+            ];
+            const userName = user.displayName || (user.email ? user.email.split('@')[0] : 'Usuario');
+            return `<aside class="fixed lg:relative z-20 inset-y-0 left-0 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 w-64 transform ${isOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0 transition-transform duration-300 ease-in-out flex flex-col"><div class="flex items-center justify-center p-6 border-b border-slate-200 dark:border-slate-800"><div class="w-8 h-8 text-blue-600">${ICONS.wandSparkles}</div><h1 class="text-xl font-bold ml-2 text-slate-900 dark:text-slate-50">KrediYA</h1></div><nav class="flex-1 p-4 space-y-2">${navItems.map(item => `<button data-action="navigate" data-page="${item.id}" class="w-full flex items-center px-4 py-2.5 rounded-lg text-sm font-medium transition-colors text-left ${page === item.id ? 'bg-blue-50 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}"><div class="w-5 h-5 mr-3">${item.icon}</div>${item.name}</button>`).join('')}</nav><div class="p-4 border-t border-slate-200 dark:border-slate-800"><div class="flex items-center p-2 rounded-lg">${Avatar(user)}<div class="ml-3 flex-1"><p class="text-sm font-semibold text-slate-900 dark:text-slate-50">${userName}</p><p class="text-xs text-slate-500 dark:text-slate-400">Formador</p></div><button data-action="logout" class="p-2 h-10 w-10 rounded-md text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-red-500" title="Cerrar Sesión"><div class="w-5 h-5">${ICONS.logOut}</div></button></div></div></aside>`;
+        };
+        
+        const Header = (isDarkMode, currentPage) => {
+            const pageTitles = { dashboard: "Panel de Control", route: "Plan de Ruta", projects: "Gestión de Proyectos", reports: "Reportes", teams: "Equipos" };
+            const menuItems = [
+                { id: 'visit', label: 'Registrar Visita', icon: ICONS.store }, 
+                { id: 'training', label: 'Programar Capacitación', icon: ICONS.graduationCap }, 
+                { id: 'project', label: 'Crear Nuevo Proyecto', icon: ICONS.folderKanban }, 
+                { id: 'otherActivity', label: 'Otras Actividades', icon: ICONS.listPlus },
+                { id: 'divider', label: 'divider' }, 
+                { id: 'weekPlanner', label: 'Planificador Rápido', icon: ICONS.calendarPlus },
+                { id: 'logHours', label: 'Registrar Horas Proyecto', icon: ICONS.briefcase }
+            ];
+            return `<header class="sticky top-0 z-10 bg-white/70 dark:bg-slate-950/70 backdrop-blur-lg border-b border-slate-200 dark:border-slate-800 p-4"><div class="flex items-center justify-between"><div class="flex items-center space-x-4"><button data-action="toggle-sidebar" class="lg:hidden text-slate-500 dark:text-slate-400"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7"></path></svg></button><h2 class="text-xl font-bold text-slate-900 dark:text-slate-50 hidden md:block">${pageTitles[currentPage] || 'Panel de Control'}</h2></div><div class="flex items-center space-x-2"><div id="clock" class="text-sm text-slate-500 dark:text-slate-400 hidden sm:block"></div><button data-action="toggle-theme" class="p-2 h-10 w-10 rounded-md flex-shrink-0 hover:bg-slate-100 dark:hover:bg-slate-800" title="Cambiar Tema"><div class="w-5 h-5">${isDarkMode ? ICONS.sun : ICONS.moon}</div></button><div id="new-action-menu" class="relative"><button data-action="open-new-menu" class="inline-flex items-center justify-center rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-600/90 px-4 py-2 space-x-2 flex-shrink-0"><div class="w-5 h-5">${ICONS.plus}</div><span class="hidden sm:inline">Nuevo</span></button><div id="new-action-dropdown" class="hidden absolute right-0 mt-2 w-64 origin-top-right rounded-md bg-white dark:bg-slate-900 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none py-1 z-20">${menuItems.map(item => item.id === 'divider' ? '<div class="h-px bg-slate-200 dark:bg-slate-700 my-1"></div>' : `<button data-action="open-modal" data-modal="${item.id}" class="w-full text-left flex items-center px-4 py-2 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"><div class="w-5 h-5 mr-3 text-slate-500 dark:text-slate-400">${item.icon}</div>${item.label}</button>`).join('')}</div></div></div></div></header>`;
+        };
+        
+        // --- COMPONENTES DEL DASHBOARD (Métricas Corregidas) ---
+        const StatCard = (item) => `<div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-sm p-4 md:p-6 flex flex-col justify-between h-full"><div class="flex justify-between items-start"><h3 class="text-sm font-medium text-slate-500 dark:text-slate-400">${item.title}</h3><div class="w-6 h-6 ${item.color}">${item.icon}</div></div><div><p class="text-2xl md:text-3xl font-bold text-slate-900 dark:text-slate-50">${item.value}</p>${item.trend ? `<p class="text-xs text-slate-500 dark:text-slate-400 mt-1">${item.trend}</p>` : ''}</div></div>`;
+        const ProductivityChart = (data = []) => { const maxValue = Math.max(...data.map(d => d.hours), 8) || 8; return `<div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-sm"><div class="p-4 md:p-6 border-b border-slate-200 dark:border-slate-800"><h3 class="text-lg font-semibold text-slate-900 dark:text-slate-50">Productividad Semanal (Horas Reportadas)</h3></div><div class="p-4 md:p-6"><div class="flex justify-between items-end h-48 space-x-2">${data.map(d => `<div class="flex-1 flex flex-col items-center"><div class="w-full bg-blue-100 dark:bg-blue-900/50 rounded-t-lg flex-grow flex items-end"><div class="w-full bg-blue-500 rounded-t-lg" style="height: ${Math.max(0, (d.hours / maxValue) * 100)}%"></div></div><span class="text-xs font-medium text-slate-500 dark:text-slate-400 mt-2">${d.day}</span></div>`).join('')}</div></div></div>`; };
+        const DailySummaryAssistant = (summaryState) => { const { loading, text } = summaryState; let content = ''; if (loading) { content = `<div class="p-4 text-center text-slate-500"><div class="w-8 h-8 text-blue-500 animate-spin mx-auto mb-3">${ICONS.wandSparkles}</div><p class="font-semibold">Analizando tu jornada...</p><p class="text-sm">Recopilando KPIs y generando tu resumen ejecutivo.</p></div>`; } else if (text) { content = `<div class="p-4 md:p-6 text-slate-700 dark:text-slate-300 space-y-3"><p class="text-sm font-semibold">Este es tu resumen de hoy, listo para copiar:</p><div class="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-md border border-slate-200 dark:border-slate-700"><pre id="summary-text-content" class="whitespace-pre-wrap font-sans text-sm">${text}</pre></div><button data-action="copy-summary" class="w-full mt-2 inline-flex items-center justify-center rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-600/90 h-10 px-4 py-2">Copiar Reporte</button><button data-action="generate-summary" class="w-full mt-2 inline-flex items-center justify-center rounded-md text-sm font-medium bg-slate-100 text-slate-900 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-50 dark:hover:bg-slate-700 h-10 px-4 py-2">Volver a Generar</button></div>`; } else { content = `<div class="p-4 md:p-6 text-slate-700 dark:text-slate-300 space-y-3"><p>Cierra tu jornada y obtén un resumen ejecutivo de tu día listo para enviar a tu gerencia.</p><p class="text-sm text-slate-500">La herramienta detectará tus actividades pendientes de hoy, las cerrará por ti y generará el reporte.</p><button data-action="generate-summary" class="w-full mt-2 inline-flex items-center justify-center rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 h-10 px-4 py-2">Cerrar Jornada y Generar Resumen</button></div>`; } return `<div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-sm"><div class="p-4 md:p-6 border-b border-slate-200 dark:border-slate-800 flex items-center space-x-2"><div class="w-6 h-6 text-indigo-500">${ICONS.wandSparkles}</div><h3 class="text-lg font-semibold">Asistente de Reporte Diario</h3></div>${content}</div>`; };
+        const RoutePlanCard = (routePlan = []) => `<div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-sm"><div class="p-4 md:p-6 border-b border-slate-200 dark:border-slate-800"><h3 class="text-lg font-semibold">Plan de Ruta para Hoy</h3></div><div class="p-4 md:p-6 space-y-4">${routePlan.length === 0 ? `<p class="text-sm text-slate-500">No hay rutas asignadas para hoy.</p>` : routePlan.map(item => `<div class="flex items-center space-x-4"><div class="w-10 h-10 rounded-full flex items-center justify-center ${item.status === 'Realizada' ? 'bg-green-100 text-green-600' : 'bg-slate-100 text-slate-500'}"><div class="w-5 h-5">${item.status === 'Realizada' ? ICONS.checkCircle : ICONS.map}</div></div><div class="flex-1"><p class="font-medium">${item.name}</p><p class="text-sm text-slate-500">${item.time}</p></div><span class="px-2 py-1 text-xs font-semibold rounded-full ${item.status === 'Realizada' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}">${item.status}</span></div>`).join('')}</div></div>`;
+        const ActiveProjectsCard = (projects = []) => `<div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-sm"><div class="p-4 md:p-6 border-b border-slate-200 dark:border-slate-800"><h3 class="text-lg font-semibold">Proyectos Activos</h3></div><div class="p-4 md:p-6 space-y-4">${projects.filter(p => p.status !== 'finalizado').length === 0 ? `<p class="text-sm text-slate-500">No hay proyectos activos.</p>` : projects.filter(p => p.status !== 'finalizado').map(p => `<div><div class="flex justify-between items-center mb-1"><p class="font-medium">${p.name}</p><span class="text-sm font-semibold">${(p.progress || 0).toFixed(0)}%</span></div><div class="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-2"><div class="bg-blue-600 h-2 rounded-full" style="width: ${p.progress || 0}%"></div></div></div>`).join('')}</div></div>`;
+        
+        // --- PÁGINAS PRINCIPALES ---
+        
+        const PlaceholderPage = (title) => `<div class="flex flex-col items-center justify-center h-full text-center"><h2 class="text-2xl font-bold">${title}</h2><p class="mt-2 text-slate-500">Esta sección está en construcción.</p></div>`;
+        const DashboardPage = () => `<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">${(state.calculatedStats || []).map(StatCard).join('')}</div><div class="grid grid-cols-1 lg:grid-cols-3 gap-6"><div class="lg:col-span-2">${ProductivityChart(state.productivityData)}</div><div class="lg:row-span-2">${DailySummaryAssistant(state.aiDailySummary)}</div><div class="lg:col-span-2">${RoutePlanCard(state.routePlan)}</div><div class="lg:col-span-3">${ActiveProjectsCard(state.activeProjects)}</div></div>`;
+        
+        const ProjectsPage = (projects = []) => {
+            const activeProjects = projects.filter(p => p.status !== 'finalizado');
+            const finalizedProjects = projects.filter(p => p.status === 'finalizado');
+            const projectCard = (p) => { const progress = p.progress || 0; return `<div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-sm"><div class="p-4 md:p-6"><div class="flex justify-between items-start"><h3 class="font-semibold text-lg mb-2">${p.name}</h3><span class="px-2 py-1 text-xs font-semibold rounded-full ${p.status === 'finalizado' ? 'bg-gray-100 text-gray-700' : 'bg-green-100 text-green-700'}">${p.status === 'finalizado' ? 'Finalizado' : 'Activo'}</span></div><div><div class="flex justify-between items-center mb-1"><p class="text-sm text-slate-500">Progreso (${p.totalHours || 0}h / ${p.estimatedHours || 'N/A'}h)</p><span class="text-sm font-semibold">${progress.toFixed(0)}%</span></div><div class="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-2"><div class="bg-blue-600 h-2 rounded-full" style="width: ${progress}%"></div></div></div>${p.status !== 'finalizado' ? `<div class="flex items-center justify-end space-x-2 mt-4 pt-4 border-t border-slate-100 dark:border-slate-800"><button data-action="edit-item" data-type="project" data-id="${p.id}" class="p-2 text-blue-600 hover:bg-blue-100 dark:hover:bg-blue-900/50 rounded-full" title="Editar"><span class="w-4 h-4">${ICONS.pencil}</span></button><button data-action="confirm-action" data-type="finalize-project" data-id="${p.id}" data-name="${p.name}" class="p-2 text-xs font-medium text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/50 rounded-md flex items-center space-x-1" title="Finalizar"><span class="w-4 h-4">${ICONS.archive}</span><span>Finalizar</span></button><button data-action="confirm-action" data-type="delete-project" data-id="${p.id}" data-name="${p.name}" class="p-2 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/50 rounded-full" title="Eliminar"><span class="w-4 h-4">${ICONS.trash}</span></button></div>` : ''}</div></div>`; }
+            return `<h1 class="text-2xl font-bold text-slate-900 dark:text-slate-50 mb-6">Proyectos Activos</h1>${activeProjects.length === 0 ? '<p class="text-slate-500">No hay proyectos activos. Añada uno para empezar.</p>' : '<div class="grid grid-cols-1 md:grid-cols-2 gap-6">' + activeProjects.map(projectCard).join('') + '</div>'}<h1 class="text-2xl font-bold text-slate-900 dark:text-slate-50 mt-10 mb-6">Proyectos Finalizados</h1>${finalizedProjects.length === 0 ? '<p class="text-slate-500">No hay proyectos finalizados.</p>' : '<div class="grid grid-cols-1 md:grid-cols-2 gap-6">' + finalizedProjects.map(projectCard).join('') + '</div>'}`;
+        };
+        
+        const ReportsPage = () => { const today = new Date().toISOString().split('T')[0]; const firstDay = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]; return `<h1 class="text-2xl font-bold text-slate-900 dark:text-slate-50 mb-6">Generador de Reportes</h1><div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-sm p-6 mb-6"><div class="grid grid-cols-1 md:grid-cols-3 gap-4 items-end"><div class="md:col-span-1"><label for="report-date-start" class="text-sm font-medium">Fecha de Inicio</label><input id="report-date-start" type="date" value="${firstDay}" class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"></div><div class="md:col-span-1"><label for="report-date-end" class="text-sm font-medium">Fecha de Fin</label><input id="report-date-end" type="date" value="${today}" class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"></div><div class="md:col-span-1 flex space-x-2"><button data-action="generate-report" class="flex-1 inline-flex items-center justify-center rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-600/90 h-10 px-4 py-2">Generar Reporte</button><button data-action="export-report" id="export-report-btn" class="hidden inline-flex items-center justify-center rounded-md text-sm font-medium bg-green-600 text-white hover:bg-green-600/90 h-10 px-4 py-2 space-x-2"><div class="w-5 h-5">${ICONS.fileDown}</div><span>Excel</span></button></div></div></div><div id="report-output-container"><div id="report-output" class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-sm p-6 min-h-[20rem]"><p class="text-slate-500">Seleccione un rango de fechas y genere un reporte para ver los resultados aquí.</p></div></div>`; };
+
+        const TeamsPage = (users = []) => { const userCard = (u) => `<div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-sm p-4 flex items-center space-x-4">${Avatar(u)}<div><p class="font-semibold text-slate-900 dark:text-slate-50">${u.displayName || 'Usuario'}</p><p class="text-sm text-slate-500 dark:text-slate-400">${u.email}</p></div></div>`; return `<h1 class="text-2xl font-bold text-slate-900 dark:text-slate-50 mb-6">Equipo de Formadores</h1>${users.length === 0 ? '<p class="text-slate-500">No se han encontrado usuarios.</p>' : '<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">' + users.map(userCard).join('') + '</div>'}`; };
+        
+        // --- 🚀 VISTAS DE CALENDARIO ---
+        const RoutePlanPage = () => {
+            const { currentDate, calendarView } = state;
+            let title = '';
+            const monthYear = currentDate.toLocaleDateString('es-CO', { month: 'long', year: 'numeric' });
+            if (calendarView === 'month') { title = monthYear; } 
+            else if (calendarView === 'week') { const weekDates = getWeekDates(currentDate, true); title = `Semana del ${weekDates[0].date} al ${weekDates[5].date} de ${monthYear}`; }
+            else { title = currentDate.toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' }); }
+            title = title.charAt(0).toUpperCase() + title.slice(1); 
+            const viewButton = (view, label) => { const isActive = state.calendarView === view; return `<button data-action="set-calendar-view" data-view="${view}" class="px-3 py-1.5 text-sm font-medium rounded-md ${isActive ? 'bg-blue-600 text-white' : 'bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700'}">${label}</button>`; };
+            let content = `<div class="flex flex-col md:flex-row justify-between items-center mb-6 gap-4"><div class="flex items-center space-x-2"><button data-action="calendar-prev" class="p-2 rounded-md bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700">&lt;</button><button data-action="calendar-next" class="p-2 rounded-md bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700">&gt;</button><h1 class="text-xl md:text-2xl font-bold text-slate-900 dark:text-slate-50 ml-2">${title}</h1></div><div class="flex items-center space-x-1 p-1 bg-slate-200 dark:bg-slate-900 rounded-lg">${viewButton('month', 'Mes')}${viewButton('week', 'Semana')}${viewButton('day', 'Día')}</div></div>`;
+            if (calendarView === 'month') { content += renderMonthView(currentDate, state.activities); } 
+            else if (calendarView === 'week') { content += renderWeekView(currentDate, state.activities); } 
+            else { content += renderDayView(currentDate, state.activities); }
+            return content;
+        };
+
+        const renderMonthView = (baseDate, activities) => {
+            const today = new Date();
+            const year = baseDate.getFullYear();
+            const month = baseDate.getMonth();
+            const firstDayOfMonth = new Date(year, month, 1);
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+            
+            // 🎯 CORRECCIÓN: Calcular el desplazamiento para que la semana inicie en Lunes (Lunes=0, Domingo=6)
+            const dayOfWeek = firstDayOfMonth.getDay(); // 0 (Dom) a 6 (Sab)
+            const startDayOfWeek = (dayOfWeek === 0) ? 6 : dayOfWeek - 1; // Lunes = 1 -> 0, Domingo = 0 -> 6
+            
+            const dayNames = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+            const monthActivities = activities.filter(a => a.date.getFullYear() === year && a.date.getMonth() === month);
+            let dayCells = '';
+            
+            // Días de la semana (Encabezado)
+            const headerRow = dayNames.map(name => `<div class="calendar-header">${name}</div>`).join('');
+            
+            // Relleno inicial 
+            for (let i = 0; i < startDayOfWeek; i++) { 
+                dayCells += `<div class="calendar-day calendar-day-other"></div>`; 
+            } 
+            
+            // Días del mes
+            for (let d = 1; d <= daysInMonth; d++) {
+                const currentDate = new Date(year, month, d);
+                const isToday = currentDate.toDateString() === today.toDateString();
+                const dayActivities = monthActivities
+                    .filter(a => a.date.getDate() === d)
+                    .sort((a, b) => a.date - b.date);
+
+                dayCells += `<div class="calendar-day ${isToday ? 'calendar-day-today' : ''}">
+                    <span data-action="calendar-day-click" data-date="${currentDate.toISOString()}" class="calendar-day-number ${isToday ? 'calendar-day-number-today' : ''}">${d}</span>
+                    <div class="mt-1 space-y-1">
+                        ${dayActivities.map(act => {
+                            const isVisit = act.type === 'visit';
+                            const isTraining = act.type === 'training';
+                            const isOther = act.type === 'other'; 
+                            const color = isVisit ? 'bg-blue-600 text-blue-50' : (isTraining ? 'bg-green-600 text-green-50' : (isOther ? 'bg-purple-600 text-purple-50' : 'bg-slate-600 text-slate-50'));
+                            const editType = isOther ? 'other' : act.type;
+                            return `<span 
+                                title="${act.name} (${act.time})" 
+                                data-action="edit-item" 
+                                data-type="${editType}" 
+                                data-id="${act.id}" 
+                                class="calendar-activity ${color} ${act.status !== 'Pendiente' ? 'opacity-60' : ''}">
+                                ${act.name}
+                            </span>`
+                        }).join('')}
+                    </div>
+                </div>`;
+            }
+            
+            // Relleno final
+            const totalCells = startDayOfWeek + daysInMonth;
+            const remainingCells = (7 - (totalCells % 7)) % 7;
+            if (remainingCells !== 7 && remainingCells > 0) { 
+                for (let i = 0; i < remainingCells; i++) { 
+                    dayCells += `<div class="calendar-day calendar-day-other"></div>`; 
+                }
+            } 
+            
+            // Se devuelve la cuadrícula completa: Encabezados + Días
+            return `<div class="calendar-grid">${headerRow}${dayCells}</div>`;
+        };
+
+
+        const renderWeekView = (baseDate, activities) => {
+            const weekDates = getWeekDates(baseDate, true); 
+            const statusColors = { 'Pendiente': 'bg-yellow-100 text-yellow-700', 'Realizada': 'bg-green-100 text-green-700', 'Cancelada': 'bg-red-100 text-red-700', 'Reprogramada': 'bg-blue-100 text-blue-700' };
+            const typeIcons = { 'visit': ICONS.store, 'training': ICONS.graduationCap, 'other': ICONS.listPlus }; 
+            const weekStart = weekDates[0].fullDate;
+            const weekEnd = weekDates[5].fullDate; weekEnd.setHours(23, 59, 59);
+            const thisWeekActivities = activities.filter(act => act.date >= weekStart && act.date <= weekEnd);
+            
+            const dayNames = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+            const schedule = {};
+            thisWeekActivities.forEach(act => { const dayName = dayNames[act.date.getDay()]; if (!schedule[dayName]) schedule[dayName] = []; schedule[dayName].push(act); });
+            
+            return `<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">${weekDates.map(dayInfo => {
+                const dayActs = (schedule[dayInfo.dayName] || []).sort((a,b) => a.date - b.date);
+                const isOther = dayActs.some(act => act.type === 'other');
+                const editType = isOther ? 'other' : (dayActs.length > 0 ? dayActs[0].type : 'visit'); 
+                
+                return `<div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-sm"><div class="p-4 border-b border-slate-200 dark:border-slate-800"><h3 class="font-semibold">${dayInfo.dayName} <span class="text-slate-500 font-normal">${dayInfo.date}</span></h3></div><div class="p-4 space-y-3">${dayActs.length > 0 ? dayActs.map(act => `<div class="p-3 rounded-lg bg-slate-50 dark:bg-slate-800/50"><div class="flex justify-between items-start"><div><p class="font-semibold flex items-center"><span class="w-5 h-5 mr-2">${typeIcons[act.type] || ICONS.briefcase}</span>${act.name}</p><p class="text-sm text-slate-500 ml-7">${act.time}</p></div><span class="px-2 py-1 text-xs font-semibold rounded-full ${statusColors[act.status] || ''}">${act.status}</span></div>${act.status === 'Pendiente' ? `<div class="flex items-center justify-end space-x-2 mt-2"><button data-action="confirm-action" data-type="cancel-activity" data-id="${act.id}" data-name="${act.name}" class="p-1 text-red-500 hover:bg-red-100 rounded-full" title="Cancelar"><span class="w-4 h-4">${ICONS.xCircle}</span></button><button data-action="log-activity" data-id="${act.id}" class="p-1.5 bg-green-500 text-white rounded-full hover:bg-green-600" title="Realizada"><span class="w-3 h-3">${ICONS.checkCircle}</span></button></div>` : ''}<div class="flex items-center justify-end space-x-1 mt-2 pt-2 border-t border-slate-100 dark:border-slate-800"><button data-action="edit-item" data-type="${act.type}" data-id="${act.id}" class="p-1 text-xs font-medium text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/50 rounded-md flex items-center space-x-1"><span class="w-4 h-4">${ICONS.pencil}</span> <span>Editar</span></button><button data-action="confirm-action" data-type="delete-activity" data-id="${act.id}" data-name="${act.name}" class="p-1 text-xs font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-900/50 rounded-md flex items-center space-x-1"><span class="w-4 h-4">${ICONS.trash}</span> <span>Eliminar</span></button></div></div>`).join('') : `<p class="text-sm text-slate-400 p-3">No hay actividades.</p>`}</div></div>`
+            }).join('')}</div>`;
+        };
+        
+        const renderDayView = (baseDate, activities) => { const statusColors = { 'Pendiente': 'bg-yellow-100 text-yellow-700', 'Realizada': 'bg-green-100 text-green-700', 'Cancelada': 'bg-red-100 text-red-700', 'Reprogramada': 'bg-blue-100 text-blue-700' };
+            const typeIcons = { 'visit': ICONS.store, 'training': ICONS.graduationCap, 'other': ICONS.listPlus };
+            const dayActivities = activities.filter(a => a.date.toDateString() === baseDate.toDateString()).sort((a,b) => a.date - b.date); return `<div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-sm"><div class="p-4 space-y-4">${dayActivities.length > 0 ? dayActivities.map(act => `<div class="p-4 rounded-lg bg-slate-50 dark:bg-slate-800/50 flex flex-col md:flex-row md:items-center md:space-x-4"><div class="w-full md:w-20 text-left md:text-center mb-2 md:mb-0"><p class="text-lg font-bold text-blue-600 dark:text-blue-400">${act.time}</p><p class="text-xs text-slate-500">${act.duration}h</p></div><div class="flex-1"><p class="font-semibold flex items-center"><span class="w-5 h-5 mr-2">${typeIcons[act.type] || ICONS.briefcase}</span>${act.name}</p>${act.type === 'training' ? `<p class="text-sm text-slate-500 ml-7">${act.participants} asistentes</p>` : ''}${act.type === 'other' ? `<p class="text-sm text-slate-500 ml-7 whitespace-pre-wrap">${act.notes || 'Sin comentarios'}</p>` : ''}</div><span class="px-3 py-1 text-sm font-semibold rounded-full ${statusColors[act.status] || ''} my-2 md:my-0">${act.status}</span><div class="flex items-center justify-end space-x-2 md:space-x-0 md:flex-col md:space-y-2 md:pl-4">${act.status === 'Pendiente' ? `<button data-action="confirm-action" data-type="cancel-activity" data-id="${act.id}" data-name="${act.name}" class="p-2 text-red-500 hover:bg-red-100 rounded-full" title="Cancelar"><span class="w-5 h-5">${ICONS.xCircle}</span></button><button data-action="log-activity" data-id="${act.id}" class="p-2 bg-green-500 text-white rounded-full hover:bg-green-600" title="Realizada"><span class="w-5 h-5">${ICONS.checkCircle}</span></button>` : ''}<button data-action="edit-item" data-type="${act.type}" data-id="${act.id}" class="p-2 text-blue-600 hover:bg-blue-100 dark:hover:bg-blue-900/50 rounded-full" title="Editar"><span class="w-5 h-5">${ICONS.pencil}</span></button><button data-action="confirm-action" data-type="delete-activity" data-id="${act.id}" data-name="${act.name}" class="p-2 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/50 rounded-full" title="Eliminar"><span class="w-5 h-5">${ICONS.trash}</span></button></div></div>`).join('') : `<div class="p-10 text-center text-slate-500"><p>No hay actividades programadas para este día.</p></div>`}</div></div>`; };
+
+        // --- COMPONENTES MODALES ---
+        const GenericModal = (isOpen, title, children) => !isOpen ? '' : `<div class="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm"><div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-sm w-full max-w-md animate-in"><div class="p-4 md:p-6 border-b flex items-center justify-between"><h3 class="text-lg font-semibold">${title}</h3><button data-action="modal-close" class="p-2 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800"><div class="w-5 h-5">${ICONS.x}</div></button></div>${children}</div></div>`;
+        const RegisterVisitModal = (isOpen) => GenericModal(isOpen, 'Registrar Nueva Visita', `<form data-action="submit-visit" class="modal-form"><div class="p-4 md:p-6 space-y-4"><div><label class="text-sm font-medium">Nombre Tienda</label><input name="name" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"></div><div class="grid grid-cols-2 gap-4"><div><label class="text-sm font-medium">Fecha</label><input name="date" type="date" value="${toISODate(new Date())}" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"></div><div><label class="text-sm font-medium">Horario</label><input name="time" type="time" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"></div></div><div><label class="text-sm font-medium">Duración (horas)</label><input name="duration" type="number" step="0.5" value="1" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"></div></div><div class="p-4 md:p-6 border-t flex justify-end"><button type="submit" class="bg-blue-600 text-white h-10 px-4 py-2 rounded-md">Guardar Visita</button></div></form>`);
+        const ScheduleTrainingModal = (isOpen) => GenericModal(isOpen, 'Programar Capacitación', `<form data-action="submit-training" class="modal-form"><div class="p-4 md:p-6 space-y-4"><div><label class="text-sm font-medium">Nombre Capacitación</label><input name="name" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"></div><div><label class="text-sm font-medium">Tipo</label><select name="type" class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"><option>Virtual</option><option>Presencial</option></select></div><div class="grid grid-cols-2 gap-4"><div><label class="text-sm font-medium">Fecha y Hora</label><input name="datetime" type="datetime-local" value="${toISODateTime(new Date())}" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"></div><div><label class="text-sm font-medium">Duración (hrs)</label><input name="duration" type="number" step="0.5" value="1" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"></div></div><div><label class="text-sm font-medium">N° Participantes</label><input name="participants" type="number" value="5" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"></div></div><div class="p-4 md:p-6 border-t flex justify-end"><button type="submit" class="bg-blue-600 text-white h-10 px-4 py-2 rounded-md">Programar</button></div></form>`);
+        const CreateProjectModal = (isOpen) => GenericModal(isOpen, 'Crear Nuevo Proyecto', `<form data-action="submit-create-project" class="modal-form"><div class="p-4 md:p-6 space-y-4"><div><label class="text-sm font-medium">Nombre del Proyecto</label><input name="name" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"></div><div><label class="text-sm font-medium">Horas Estimadas (Opcional)</label><input name="estimatedHours" type="number" step="1" class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"><p class="text-xs text-slate-500 mt-1">Define un total de horas para calcular el progreso automáticamente.</p></div></div><div class="p-4 md:p-6 border-t flex justify-end"><button type="submit" class="bg-blue-600 text-white h-10 px-4 py-2 rounded-md">Guardar Proyecto</button></div></form>`);
+        
+        // 🚀 NUEVO MODAL: Otras Actividades
+        const OtherActivityModal = (isOpen) => GenericModal(isOpen, 'Registrar Otra Actividad', `<form data-action="submit-other-activity" class="modal-form"><div class="p-4 md:p-6 space-y-4"><div><label class="text-sm font-medium">Nombre de la Actividad</label><input name="name" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"></div><div class="grid grid-cols-2 gap-4"><div><label class="text-sm font-medium">Fecha</label><input name="date" type="date" value="${toISODate(new Date())}" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"></div><div><label class="text-sm font-medium">Duración (horas)</label><input name="duration" type="number" step="0.5" value="1" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"></div></div><div><label class="text-sm font-medium">Comentarios/Notas</label><textarea name="notes" rows="3" required class="mt-1 flex w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"></textarea></div></div><div class="p-4 md:p-6 border-t flex justify-end"><button type="submit" class="bg-purple-600 text-white h-10 px-4 py-2 rounded-md">Registrar Actividad</button></div></form>`);
+        // 🚀 FIN NUEVO MODAL
+
+        const CloseDayModal = (isOpen, activities, projects) => { if (activities.length === 0) return ''; const activeProjects = projects.filter(p => p.status !== 'finalizado'); const projectOptions = (selectedId) => [`<option value="" ${!selectedId ? 'selected' : ''}>-- Sin Proyecto --</option>`, ...activeProjects.map(p => `<option value="${p.id}" ${selectedId === p.id ? 'selected' : ''}>${p.name}</option>`)].join(''); const activityRow = (act) => `<div class="py-3 border-b border-slate-200 dark:border-slate-700"><p class="font-medium">${act.name} (${act.time})</p><div class="grid grid-cols-5 gap-2 mt-2"><div class="col-span-2"><label class="text-xs font-medium">Duración (h)</label><input name="duration_${act.id}" type="number" step="0.5" value="${act.duration || 1}" class="mt-1 flex h-9 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1 text-sm"></div><div class="col-span-3"><label class="text-xs font-medium">Asociar a Proyecto</label><select name="project_${act.id}" class="mt-1 flex h-9 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1 text-sm">${projectOptions(act.projectId)}</select></div></div></div>`; return GenericModal(isOpen, 'Cierre Rápido de Jornada', `<form data-action="submit-close-day"><div class="p-4 md:p-6 max-h-[60vh] overflow-y-auto"><p class="text-sm text-slate-600 dark:text-slate-300 mb-4">Confirma la duración y asigna un proyecto a las **${activities.length}** actividades pendientes. Se marcarán todas como "Realizadas".</p><div class="divide-y divide-slate-200 dark:divide-slate-700">${activities.map(activityRow).join('')}</div></div><div class="p-4 md:p-6 border-t flex justify-end"><button type="submit" class="bg-green-600 text-white h-10 px-4 py-2 rounded-md">Confirmar y Cerrar Jornada</button></div></form>`); };
+        const EditProjectModal = (isOpen) => { if (!isOpen) return ''; const proj = state.activeProjects.find(p => p.id === state.editingItemId); if (!proj) return GenericModal(true, 'Error', '<p class="p-4">No se pudo cargar el proyecto.</p>'); return GenericModal(true, 'Editar Proyecto', `<form data-action="submit-edit-project" class="modal-form"><div class="p-4 md:p-6 space-y-4"><div><label class="text-sm font-medium">Nombre</label><input name="name" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2" value="${proj.name || ''}"></div><div><label class="text-sm font-medium">Horas Estimadas</label><input name="estimatedHours" type="number" step="1" class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2" value="${proj.estimatedHours || ''}"></div></div><div class="p-4 md:p-6 border-t flex justify-end"><button type="submit" class="bg-blue-600 text-white h-10 px-4 py-2 rounded-md">Guardar Cambios</button></div></form>`); };
+        const EditVisitModal = (isOpen) => { if (!isOpen) return ''; const act = state.activities.find(a => a.id === state.editingItemId); if (!act) return GenericModal(true, 'Error', '<p class="p-4">No se pudo cargar la visita.</p>'); return GenericModal(true, 'Editar Visita', `<form data-action="submit-edit-visit" class="modal-form"><div class="p-4 md:p-6 space-y-4"><div><label class="text-sm font-medium">Nombre Tienda</label><input name="name" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2" value="${act.name || ''}"></div><div class="grid grid-cols-2 gap-4"><div><label class="text-sm font-medium">Fecha</label><input name="date" type="date" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2" value="${toISODate(act.date)}"></div><div><label class="text-sm font-medium">Horario</label><input name="time" type="time" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2" value="${act.time || ''}"></div></div><div><label class="text-sm font-medium">Duración (horas)</label><input name="duration" type="number" step="0.5" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2" value="${act.duration || 0}"></div></div><div class="p-4 md:p-6 border-t flex justify-end"><button type="submit" class="bg-blue-600 text-white h-10 px-4 py-2 rounded-md">Guardar Cambios</button></div></form>`); };
+        const EditTrainingModal = (isOpen) => { if (!isOpen) return ''; const act = state.activities.find(a => a.id === state.editingItemId); if (!act) return GenericModal(true, 'Error', '<p class="p-4">No se pudo cargar la capacitación.</p>'); return GenericModal(true, 'Editar Capacitación', `<form data-action="submit-edit-training" class="modal-form"><div class="p-4 md:p-6 space-y-4"><div><label class="text-sm font-medium">Nombre Capacitación</label><input name="name" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2" value="${act.name || ''}"></div><div><label class="text-sm font-medium">Tipo</label><select name="type" class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"><option ${act.trainingType === 'Virtual' ? 'selected' : ''}>Virtual</option><option ${act.trainingType === 'Presencial' ? 'selected' : ''}>Presencial</option></select></div><div class="grid grid-cols-2 gap-4"><div><label class="text-sm font-medium">Fecha y Hora</label><input name="datetime" type="datetime-local" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2" value="${toISODateTime(act.date)}"></div><div><label class="text-sm font-medium">Duración (hrs)</label><input name="duration" type="number" step="0.5" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2" value="${act.duration || 0}"></div></div><div><label class="text-sm font-medium">N° Participantes</label><input name="participants" type="number" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2" value="${act.participants || 0}"></div></div><div class="p-4 md:p-6 border-t flex justify-end"><button type="submit" class="bg-blue-600 text-white h-10 px-4 py-2 rounded-md">Guardar Cambios</button></div></form>`); };
+        const LogActivityModal = (isOpen, projects) => { if (!isOpen) return ''; const act = state.activities.find(a => a.id === state.editingItemId); if (!act) return GenericModal(true, 'Error', '<p class="p-4">No se pudo cargar la actividad.</p>'); const activeOnlyProjects = projects.filter(p => p.status !== 'finalizado'); return GenericModal(true, `Cerrar: ${act.name}`, `<form data-action="submit-log-activity" class="modal-form"><div class="p-4 md:p-6 space-y-4"><div><label class="text-sm font-medium">Duración Real (horas)</label><input name="duration" type="number" step="0.5" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2" value="${act.duration || 1}"></div><div><label class="text-sm font-medium">Asociar a Proyecto (Opcional)</label><select name="projectId" class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"><option value="">Ningún proyecto</option>${activeOnlyProjects.map(p => `<option value="${p.id}">${p.name}</option>`).join('')}</select></div><div><label class="text-sm font-medium">Notas (Opcional)</label><textarea name="notes" rows="3" class="mt-1 flex w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"></textarea></div></div><div class="p-4 md:p-6 border-t flex justify-end"><button type="submit" class="bg-green-600 text-white h-10 px-4 py-2 rounded-md">Guardar Cierre</button></div></form>`); };
+        const ConfirmModal = ({ isOpen, title, message, confirmLabel, confirmColor }) => !isOpen ? '' : `<div class="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm"><div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-sm w-full max-w-sm animate-in"><div class="p-4 md:p-6 text-center"><h3 class="text-lg font-semibold mb-2">${title || 'Confirmar'}</h3><p class="text-sm text-slate-600 dark:text-slate-400">${message || '¿Estás seguro?'}</p></div><div class="p-4 md:p-6 border-t flex justify-center space-x-2"><button data-action="confirm-cancel" class="flex-1 bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-50 h-10 px-4 py-2 rounded-md">Cancelar</button><button data-action="confirm-ok" class="flex-1 ${confirmColor || 'bg-red-600'} text-white h-10 px-4 py-2 rounded-md">${confirmLabel || 'Confirmar'}</button></div></div></div>`;
+
+        // 🚀 --- NUEVOS MODALES DE CARGA RÁPIDA --- 🚀
+        const LogProjectHoursModal = (isOpen, projects) => {
+            const activeOnlyProjects = projects.filter(p => p.status !== 'finalizado');
+            return GenericModal(isOpen, 'Registrar Horas de Proyecto', `<form data-action="submit-log-hours" class="modal-form"><div class="p-4 md:p-6 space-y-4"><div><label class="text-sm font-medium">Proyecto</label><select name="projectId" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"><option value="">Seleccione un proyecto...</option>${activeOnlyProjects.map(p => `<option value="${p.id}">${p.name}</option>`).join('')}</select></div><div class="grid grid-cols-2 gap-4"><div><label class="text-sm font-medium">Fecha</label><input name="date" type="date" value="${toISODate(new Date())}" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"></div><div><label class="text-sm font-medium">Duración (h)</label><input name="duration" type="number" step="0.5" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"></div></div><div><label class="text-sm font-medium">Descripción de Tarea</label><textarea name="notes" rows="3" required class="mt-1 flex w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"></textarea></div></div><div class="p-4 md:p-6 border-t flex justify-end"><button type="submit" class="bg-blue-600 text-white h-10 px-4 py-2 rounded-md">Registrar Horas</button></div></form>`);
+        };
+
+        const WeekPlannerModal = (isOpen) => {
+            return GenericModal(isOpen, 'Planificador Rápido Semanal', `<form data-action="submit-week-plan" class="modal-form"><div class="p-4 md:p-6 space-y-4"><div><label class="text-sm font-medium">Tipo de Actividad</label><select name="type" class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"><option value="visit">Visita a Tienda</option><option value="training">Capacitación</option></select></div><div><label class="text-sm font-medium">Nombre (Ej: Tienda ABC, Capacitación XYZ)</label><input name="name" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"></div><div class="grid grid-cols-3 gap-4"><div><label class="text-sm font-medium">Semana (Fecha Inicio)</label><input name="startDate" type="date" value="${toISODate(new Date())}" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"></div><div><label class="text-sm font-medium">Hora</label><input name="time" type="time" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"></div><div><label class="text-sm font-medium">Duración (h)</label><input name="duration" type="number" step="0.5" value="1" required class="mt-1 flex h-10 w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2"></div></div><div><label class="text-sm font-medium">Repetir en los siguientes días de esa semana:</label><div class="mt-2 grid grid-cols-3 sm:grid-cols-6 gap-2">${['L', 'M', 'W', 'J', 'V', 'S'].map((day, i) => `<label for="day_${i}" class="flex items-center space-x-2 p-2 border border-slate-300 dark:border-slate-700 rounded-md justify-center"><input type="checkbox" id="day_${i}" name="day" value="${i+1}" class="h-4 w-4 rounded"><span>${day}</span></label>`).join('')}</div></div></div><div class="p-4 md:p-6 border-t flex justify-end"><button type="submit" class="bg-blue-600 text-white h-10 px-4 py-2 rounded-md">Planificar Actividades</button></div></form>`);
+        };
+
+
+        // --- LÓGICA DE DATOS Y UTILIDADES ---
+
+        const toISODate = (date) => { if (!date) return ''; const d = new Date(date.getTime() - (date.getTimezoneOffset() * 60000)); return d.toISOString().split('T')[0]; };
+        const toISODateTime = (date) => { if (!date) return ''; const d = new Date(date.getTime() - (date.getTimezoneOffset() * 60000)); return d.toISOString().slice(0, 16); };
+        
+        const getWeekDates = (baseDate, workWeekOnly = true) => {
+            const dates = [];
+            const today = new Date(baseDate);
+            const dayOfWeek = today.getDay(); // Domingo = 0, Lunes = 1
+            let currentMonday = new Date(today.setDate(today.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1))); // Ajustar a Lunes
+            const dayNames = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+            const daysToLoop = workWeekOnly ? 6 : 7; // 6 días para L-S, 7 para L-D
+            for(let i=0; i < daysToLoop; i++) {
+                const currentDate = new Date(currentMonday);
+                currentDate.setDate(currentMonday.getDate() + i);
+                // Utilizar el nombre del día en español (Lunes-Domingo) según el índice i
+                dates.push({ dayName: dayNames[i % 7], date: currentDate.getDate(), fullDate: currentDate });
+            }
+            return dates; 
+        };
+        
+        const generateLocalSummary = () => {
+            const now = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Bogota" }));
+            const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+            const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+            const todayString = todayStart.toLocaleDateString('es-CO', { dateStyle: 'long' });
+            const projectUpdates = state.projectUpdates.filter(p => p.date >= todayStart && p.date <= todayEnd);
+            const activities = state.activities.filter(a => a.date >= todayStart && a.date <= todayEnd);
+            const totalHours = projectUpdates.reduce((sum, item) => sum + (item.duration || 0), 0);
+            const visits = activities.filter(a => a.type === 'visit');
+            const visitsDone = visits.filter(a => a.status === 'Realizada');
+            const visitsCanceled = activities.filter(a => a.type === 'visit' && a.status === 'Cancelada');
+            const visitsPending = activities.filter(a => a.type === 'visit' && a.status === 'Pendiente');
+            const trainings = activities.filter(a => a.type === 'training');
+            const trainingsDone = trainings.filter(a => a.status === 'Realizada');
+            const trainingsCanceled = trainings.filter(a => a.type === 'training' && a.status === 'Cancelada');
+            const trainingsPending = activities.filter(a => a.type === 'training' && a.status === 'Pendiente');
+            const otherActivities = activities.filter(a => a.type === 'other' && a.status === 'Realizada');
+            const totalParticipants = trainingsDone.reduce((sum, item) => sum + (item.participants || 0), 0);
+            if (totalHours === 0 && activities.length === 0) { return "No se encontraron actividades ni horas registradas para el día de hoy."; }
+            let summary = `**Resumen de Actividad - ${todayString}**\n\n**Resumen General**\nSe registró un total de **${totalHours.toFixed(1)} horas**. Se completó **${visitsDone.length} de ${visits.length}** visitas planificadas y se realizaron **${trainingsDone.length}** capacitaciones, impactando a **${totalParticipants}** personas. ${otherActivities.length > 0 ? `Se registraron **${otherActivities.length}** actividades misceláneas.` : ''}\n\n**Avance de Proyectos y Horas Registradas**\n`;
+            if (projectUpdates.length === 0) { summary += `* No se registraron avances en proyectos el día de hoy.\n`; } 
+            else { projectUpdates.forEach(p => { summary += `* [${p.projectName || 'Actividades Varias'}] (${p.duration}h): ${p.update}\n`; }); }
+            summary += `\n**Detalle de Actividades Completadas**\n`;
+            if (visitsDone.length === 0 && trainingsDone.length === 0 && otherActivities.length === 0) { summary += `* No se completaron actividades planificadas hoy.\n`; } 
+            else { 
+                visitsDone.forEach(v => { summary += `* (Visita) ${v.name}\n`; }); 
+                trainingsDone.forEach(t => { summary += `* (Capacitación) ${t.name} (${t.participants} asistentes)\n`; });
+                otherActivities.forEach(o => { summary += `* (Otros) ${o.name}\n`; });
+            }
+            summary += `\n`;
+            const novedades = [...visitsCanceled, ...visitsPending, ...trainingsCanceled, ...trainingsPending];
+            if (novedades.length > 0) { summary += `**Novedades y Pendientes**\n`; novedades.forEach(n => { summary += `* (${n.status}) ${n.type === 'visit' ? 'Visita' : 'Capacitación'}: ${n.name}\n`; }); }
+            return summary;
+        };
+        
+        const closeActivitiesBatch = async (activitiesToBatch) => {
+            const batch = db.batch();
+            activitiesToBatch.forEach(act => {
+                const activityRef = db.collection(`users/${userId}/activities`).doc(act.id);
+                batch.update(activityRef, { status: 'Realizada', duration: act.duration });
+                const projectRef = db.collection(`users/${userId}/projectUpdates`).doc();
+                const projectName = (act.projectId ? (state.activeProjects.find(p => p.id === act.projectId)?.name || 'Proyecto No Encontrado') : "Actividades Varias");
+                batch.set(projectRef, { date: act.date, duration: act.duration, update: act.update || `Horas de: ${act.name}`, projectId: act.projectId || null, projectName: projectName, userId: userId });
+            });
+            await batch.commit();
+        };
+
+        // --- EVENT LISTENERS (Optimizados) ---
+
+        document.addEventListener('click', async (e) => {
+            if (!state.user) return;
+            const target = e.target.closest('[data-action]');
+            if (!target) { if (!e.target.closest('#new-action-menu')) { document.getElementById('new-action-dropdown')?.classList.add('hidden'); } return; }
+            const action = target.dataset.action;
+            const ds = target.dataset;
+            if (action.startsWith('open-')) e.stopPropagation();
+
+            try {
+                // --- Navegación y UI ---
+                if (action === 'logout') await auth.signOut();
+                else if (action === 'toggle-theme') { state.isDarkMode = !state.isDarkMode; document.documentElement.classList.toggle('dark', state.isDarkMode); render(); }
+                else if (action === 'toggle-sidebar') { state.isSidebarOpen = !state.isSidebarOpen; render(); }
+                else if (action === 'navigate') { state.currentPage = ds.page; if (ds.page === 'route') state.calendarView = 'month'; render(); } // 🎯 Ajuste: Establecer a 'month' al navegar a 'route'
+                else if (action === 'open-new-menu') { document.getElementById('new-action-dropdown').classList.toggle('hidden'); }
+                else if (action === 'modal-close' || action === 'confirm-cancel') { state.activeModal = null; state.confirmModal.isOpen = false; render(); }
+
+                // --- Abrir Modales ---
+                else if (action === 'open-modal') { state.activeModal = ds.modal; document.getElementById('new-action-dropdown')?.classList.add('hidden'); render(); }
+                else if (action === 'log-activity') { state.editingItemId = ds.id; state.activeModal = 'logActivity'; render(); }
+                
+                // --- Calendario ---
+                else if (action === 'set-calendar-view') { state.calendarView = ds.view; render(); }
+                else if (action === 'calendar-day-click') { state.currentDate = new Date(ds.date); state.calendarView = 'day'; render(); }
+                else if (action === 'calendar-prev') {
+                    if (state.calendarView === 'month') state.currentDate.setMonth(state.currentDate.getMonth() - 1);
+                    else if (state.calendarView === 'week') state.currentDate.setDate(state.currentDate.getDate() - 7);
+                    else state.currentDate.setDate(state.currentDate.getDate() - 1);
+                    render();
+                } else if (action === 'calendar-next') {
+                    if (state.calendarView === 'month') state.currentDate.setMonth(state.currentDate.getMonth() + 1);
+                    else if (state.calendarView === 'week') state.currentDate.setDate(state.currentDate.getDate() + 7);
+                    else state.currentDate.setDate(state.currentDate.getDate() + 1);
+                    render();
+                }
+
+                // --- Asistente y Reportes ---
+                else if (action === 'generate-summary') {
+                    state.aiDailySummary.loading = true; render();
+                    const now = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Bogota" }));
+                    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+                    const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+                    state.activitiesToClose = state.activities.filter(a => a.date >= todayStart && a.date <= todayEnd && a.status === 'Pendiente');
+                    if (state.activitiesToClose.length > 0) { state.activeModal = 'closeDay'; state.aiDailySummary.loading = false; } 
+                    else { setTimeout(() => { state.aiDailySummary.text = generateLocalSummary(); state.aiDailySummary.loading = false; render(); }, 300); }
+                } else if (action === 'copy-summary') {
+                    await navigator.clipboard.writeText(document.getElementById('summary-text-content').innerText);
+                    showToast("¡Resumen copiado al portapapeles!");
+                } else if (action === 'generate-report') {
+                    const dateStartInput = document.getElementById('report-date-start').value;
+                    const dateEndInput = document.getElementById('report-date-end').value;
+                    if (!dateStartInput || !dateEndInput) { showToast("Seleccione una fecha de inicio y fin."); return; }
+                    const selectedDateStart = new Date(`${dateStartInput}T00:00:00`);
+                    const selectedDateEnd = new Date(`${dateEndInput}T23:59:59`);
+                    if (selectedDateEnd < selectedDateStart) { showToast("La fecha de fin no puede ser anterior a la fecha de inicio."); return; }
+                    const activitiesInRange = state.activities.filter(a => a.date >= selectedDateStart && a.date <= selectedDateEnd);
+                    const projectUpdatesInRange = state.projectUpdates.filter(p => p.date >= selectedDateStart && p.date <= selectedDateEnd);
+                    const { html, reportData } = generateReportHTML(selectedDateStart, selectedDateEnd, activitiesInRange, projectUpdatesInRange);
+                    document.getElementById('report-output').innerHTML = html;
+                    state.currentReportData = reportData;
+                    document.getElementById('export-report-btn').classList.remove('hidden');
+                } else if (action === 'export-report') {
+                    if (state.currentReportData) { exportReportToExcel(state.currentReportData); } 
+                    else { showToast("No hay datos de reporte para exportar."); }
+                } else if (action === 'print-report') { window.print(); }
+
+                // --- Modales de Confirmación ---
+                else if (action === 'confirm-action') {
+                    let modalConfig = { isOpen: true, confirmColor: 'bg-red-600' };
+                    if (ds.type === 'delete-project') { modalConfig = { ...modalConfig, title: 'Eliminar Proyecto', message: `¿Seguro que quieres eliminar "${ds.name}"?`, onConfirm: async () => { await db.collection(`users/${userId}/projects`).doc(ds.id).delete(); }};
+                    } else if (ds.type === 'finalize-project') { modalConfig = { ...modalConfig, title: 'Finalizar Proyecto', message: `¿Marcar "${ds.name}" como finalizado?`, confirmColor: 'bg-blue-600', onConfirm: async () => { await db.collection(`users/${userId}/projects`).doc(ds.id).update({ status: 'finalizado' }); }};
+                    } else if (ds.type === 'delete-activity') { modalConfig = { ...modalConfig, title: 'Eliminar Actividad', message: `¿Seguro que quieres eliminar "${ds.name}"?`, onConfirm: async () => { await db.collection(`users/${userId}/activities`).doc(ds.id).delete(); }};
+                    } else if (ds.type === 'cancel-activity') { modalConfig = { ...modalConfig, title: 'Cancelar Actividad', message: `¿Seguro que quieres cancelar "${ds.name}"?`, onConfirm: async () => { await db.collection(`users/${userId}/activities`).doc(ds.id).update({ status: 'Cancelada' }); }}; }
+                    state.confirmModal = modalConfig;
+                    render();
+                } else if (action === 'confirm-ok') {
+                    await state.confirmModal.onConfirm();
+                    state.confirmModal.isOpen = false;
+                    render();
+                }
+
+                // --- Abrir Modales de Edición ---
+                else if (action === 'edit-item') {
+                    state.editingItemId = ds.id;
+                    if (ds.type === 'project') state.activeModal = 'editProject';
+                    else if (ds.type === 'visit') state.activeModal = 'editVisit';
+                    else if (ds.type === 'training') state.activeModal = 'editTraining';
+                    else if (ds.type === 'other') showToast("La edición de Otras Actividades no está disponible."); 
+                    render();
+                }
+
+            } catch (error) { console.error("Error en la acción:", action, error); showToast(`Error: ${error.message}`); }
+        });
+
+        // --- Listener Global para FORMS (Optimizados) ---
+        document.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const target = e.target.closest('form');
+            if (!target) return;
+            const action = target.dataset.action;
+            const data = new FormData(target);
+            
+            if (action === 'submit-login') {
+                const btn = document.getElementById('login-button');
+                btn.textContent = 'Ingresando...'; btn.disabled = true;
+                try { await auth.signInWithEmailAndPassword(data.get('email'), data.get('password')); } 
+                catch (error) {
+                    const errorDiv = document.getElementById('login-error');
+                    let message = 'Credenciales incorrectas.';
+                    if (error.code === 'auth/user-not-found') message = 'Este correo electrónico no está registrado.';
+                    else if (error.code === 'auth/wrong-password') message = 'La contraseña es incorrecta.';
+                    errorDiv.textContent = message; errorDiv.classList.remove('hidden');
+                    btn.textContent = 'Ingresar'; btn.disabled = false;
+                }
+                return;
+            }
+            
+            if (!state.user) return; // Proteger el resto de forms
+
+            try {
+                if (action === 'submit-visit') {
+                    const activityDate = new Date(`${data.get('date')}T${data.get('time')}`);
+                    await db.collection(`users/${userId}/activities`).add({ type: 'visit', name: data.get('name'), date: activityDate, time: data.get('time'), duration: parseFloat(data.get('duration')), status: 'Pendiente', userId });
+                }
+                else if (action === 'submit-training') {
+                    const activityDate = new Date(data.get('datetime'));
+                    await db.collection(`users/${userId}/activities`).add({ type: 'training', name: data.get('name'), trainingType: data.get('type'), date: activityDate, time: activityDate.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}), duration: parseFloat(data.get('duration')), participants: parseInt(data.get('participants')) || 0, status: 'Pendiente', userId });
+                }
+                else if (action === 'submit-create-project') {
+                    await db.collection(`users/${userId}/projects`).add({ name: data.get('name'), estimatedHours: parseFloat(data.get('estimatedHours')) || 0, status: 'activo', userId });
+                }
+                // 🚀 NUEVO HANDLER: submit-other-activity
+                else if (action === 'submit-other-activity') {
+                    const activityDate = new Date(`${data.get('date')}T12:00:00`);
+                    const name = data.get('name');
+                    const duration = parseFloat(data.get('duration'));
+                    const notes = data.get('notes');
+                    
+                    const batch = db.batch();
+                    
+                    // a) Registro en activities
+                    const activityRef = db.collection(`users/${userId}/activities`).doc();
+                    batch.set(activityRef, { 
+                        type: 'other', 
+                        name: name, 
+                        date: activityDate, 
+                        time: '12:00', // Por defecto 12:00 PM
+                        duration: duration, 
+                        status: 'Realizada', // Se registra como realizada de inmediato
+                        notes: notes,
+                        userId 
+                    });
+                    
+                    // b) Registro en projectUpdates (para contabilidad de horas)
+                    const projectRef = db.collection(`users/${userId}/projectUpdates`).doc();
+                    batch.set(projectRef, { 
+                        date: activityDate, 
+                        duration: duration, 
+                        update: `${name}: ${notes}`, 
+                        projectId: null, // Importante: Sin ID de proyecto
+                        projectName: 'Otras Actividades (Reporte Directo)', // Tag de reporte
+                        userId 
+                    });
+                    
+                    await batch.commit();
+                }
+                else if (action === 'submit-edit-project') {
+                    await db.collection(`users/${userId}/projects`).doc(state.editingItemId).update({ name: data.get('name'), estimatedHours: parseFloat(data.get('estimatedHours')) || 0 });
+                }
+                else if (action === 'submit-edit-visit') {
+                    const activityDate = new Date(`${data.get('date')}T${data.get('time')}`);
+                    await db.collection(`users/${userId}/activities`).doc(state.editingItemId).update({ name: data.get('name'), date: activityDate, time: data.get('time'), duration: parseFloat(data.get('duration')) });
+                }
+                else if (action === 'submit-edit-training') {
+                    const activityDate = new Date(data.get('datetime'));
+                    await db.collection(`users/${userId}/activities`).doc(state.editingItemId).update({ name: data.get('name'), trainingType: data.get('type'), date: activityDate, time: activityDate.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}), duration: parseFloat(data.get('duration')), participants: parseInt(data.get('participants')) || 0 });
+                }
+                else if (action === 'submit-log-activity') {
+                    const act = state.activities.find(a => a.id === state.editingItemId);
+                    if (!act) throw new Error("Actividad no encontrada");
+                    await closeActivitiesBatch([{ ...act, duration: parseFloat(data.get('duration')), projectId: data.get('projectId'), update: data.get('notes') || `Horas de: ${act.name}` }]);
+                }
+                else if (action === 'submit-close-day') {
+                    const activitiesToBatch = state.activitiesToClose.map(act => ({ ...act, duration: parseFloat(data.get(`duration_${act.id}`)), projectId: data.get(`project_${act.id}`) }));
+                    await closeActivitiesBatch(activitiesToBatch);
+                    state.aiDailySummary.loading = true;
+                }
+                // 🚀 --- NUEVOS HANDLERS DE FORM --- 🚀
+                else if (action === 'submit-log-hours') {
+                    const projectId = data.get('projectId');
+                    const proj = state.activeProjects.find(p => p.id === projectId);
+                    await db.collection(`users/${userId}/projectUpdates`).add({
+                        date: new Date(`${data.get('date')}T12:00:00`), // Usar mediodía para evitar zonas horarias
+                        duration: parseFloat(data.get('duration')),
+                        update: data.get('notes'),
+                        projectId: projectId,
+                        projectName: proj?.name || 'Proyecto No Encontrado',
+                        userId: userId
+                    });
+                }
+                else if (action === 'submit-week-plan') {
+                    const batch = db.batch();
+                    const name = data.get('name');
+                    const type = data.get('type');
+                    const time = data.get('time');
+                    const duration = parseFloat(data.get('duration'));
+                    const selectedDays = Array.from(data.getAll('day')).map(d => parseInt(d)); // [1, 3, 5]
+                    
+                    const startDate = new Date(`${data.get('startDate')}T00:00:00`); // Fecha base
+                    const startDayOfWeek = startDate.getDay(); // Domingo=0, Lunes=1
+                    let baseMonday = new Date(startDate.setDate(startDate.getDate() - (startDayOfWeek === 0 ? 6 : startDayOfWeek - 1))); // Lunes de esa semana
+
+                    let count = 0;
+                    for(const dayIndex of selectedDays) { // dayIndex es 1 para Lunes, 6 para Sábado
+                        const activityDate = new Date(baseMonday.getTime());
+                        activityDate.setDate(baseMonday.getDate() + (dayIndex - 1)); // dayIndex 1 = +0 días, dayIndex 6 = +5 días
+                        
+                        const activityDateTime = new Date(`${toISODate(activityDate)}T${time}`);
+                        const activityRef = db.collection(`users/${userId}/activities`).doc();
+                        
+                        if(type === 'visit') {
+                            batch.set(activityRef, { type: 'visit', name, date: activityDateTime, time, duration, status: 'Pendiente', userId });
+                        } else {
+                            batch.set(activityRef, { type: 'training', name, trainingType: 'Presencial', date: activityDateTime, time, duration, participants: 0, status: 'Pendiente', userId });
+                        }
+                        count++;
+                    }
+                    await batch.commit();
+                    showToast(`¡Se planificaron ${count} actividades!`);
+                }
+
+                // --- Limpieza Post-Submit ---
+                state.activeModal = null; state.editingItemId = null; render();
+                if(action === 'submit-close-day') { state.aiDailySummary.text = generateLocalSummary(); state.aiDailySummary.loading = false; render(); }
+            } catch (error) { console.error("Error en el formulario:", action, error); showToast(`Error al guardar: ${error.message}`); state.activeModal = null; render(); }
+        });
+        
+        
+        // --- 🚀 LÓGICA DE DASHBOARD (MÉTRICAS CORREGIDAS) ---
+        const updateIndicators = () => { 
+            const today = new Date();
+            const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+            const todayEnd = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59);
+
+            // 1. Horas Reportadas (Hoy)
+            const totalHoursToday = state.projectUpdates
+                .filter(item => item.date >= todayStart && item.date <= todayEnd)
+                .reduce((sum, item) => sum + (item.duration || 0), 0);
+            
+            // 2. Horas Programadas (Hoy)
+            const programmedHoursToday = state.activities
+                .filter(act => act.date >= todayStart && act.date <= todayEnd)
+                .reduce((sum, act) => sum + (act.duration || 0), 0);
+            
+            // 3. Visitas (Hoy)
+            state.routePlan = state.activities.filter(act => act.type === 'visit' && act.date >= todayStart && act.date <= todayEnd);
+            const visitedTodayCount = state.routePlan.filter(r => r.status === 'Realizada').length;
+
+            // 4. Productividad Semanal (Gráfico)
+            const days = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
+            const weeklyHours = Array(6).fill(0);
+            const weekDates = getWeekDates(new Date(), true); // true = solo semana laboral (6 días)
+            const weekStart = weekDates[0].fullDate;
+            const weekEnd = weekDates[5].fullDate; weekEnd.setHours(23,59,59); 
+            state.projectUpdates.forEach(item => { if(item.date && item.duration && item.date >= weekStart && item.date <= weekEnd) { const dayIndex = (item.date.getDay() + 6) % 7; if(dayIndex < 6) { weeklyHours[dayIndex] += item.duration; } } }); 
+            state.productivityData = days.map((day, i) => ({ day, hours: weeklyHours[i] })); 
+            
+            // 5. 🚀 Cumplimiento Semanal (Real)
+            const allWeeklyVisits = state.activities.filter(a => a.type === 'visit' && a.date >= weekStart && a.date <= weekEnd);
+            const completedWeeklyVisits = allWeeklyVisits.filter(a => a.status === 'Realizada');
+            const weeklyCompliance = (allWeeklyVisits.length > 0) ? (completedWeeklyVisits.length / allWeeklyVisits.length) * 100 : 0;
+
+            // 6. Proyectos
+            state.activeProjects.forEach(p => {
+                const totalHours = state.projectUpdates.filter(up => up.projectId === p.id).reduce((sum, up) => sum + (up.duration || 0), 0);
+                p.totalHours = totalHours;
+                p.progress = (p.estimatedHours && p.estimatedHours > 0) ? (totalHours / p.estimatedHours) * 100 : 0;
+                if (p.progress > 100) p.progress = 100;
+            });
+            const activeProjectCount = state.activeProjects.filter(p => p.status === 'activo').length; 
+            
+            // 7. 🚀 Asignar Métricas Corregidas
+            state.calculatedStats = [ 
+                { title: "Horas Reportadas (Hoy)", value: `${totalHoursToday.toFixed(1)} / ${programmedHoursToday.toFixed(1)}h`, icon: ICONS.clock, color: "text-blue-500" }, 
+                { title: "Visitas (Hoy)", value: `${visitedTodayCount} / ${state.routePlan.length}`, icon: ICONS.store, color: "text-green-500" }, 
+                { title: "Cumplimiento Semanal", value: `${weeklyCompliance.toFixed(0)}%`, trend: `${completedWeeklyVisits.length}/${allWeeklyVisits.length} visitas`, icon: ICONS.checkCircle, color: "text-indigo-500" }, 
+                { title: "Proyectos Activos", value: activeProjectCount, icon: ICONS.folderKanban, color: "text-orange-500" }, 
+            ]; 
+        };
+        const updateClock = () => { const clockEl = document.getElementById('clock'); if (clockEl) { const now = new Date(); const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' }; clockEl.textContent = now.toLocaleDateString('es-CO', options); } };
+        const showToast = (message, duration = 4000) => { const toast = document.getElementById('toast'); toast.textContent = message; toast.classList.remove('hidden'); setTimeout(() => toast.classList.add('hidden'), duration); };
+        
+        // --- 🚀 FUNCIONES DE REPORTE (Mejoradas) ---
+
+        const generateReportHTML = (dateStart, dateEnd, activities, projectUpdates) => {
+            const visits = activities.filter(a => a.type === 'visit' && a.status === 'Realizada');
+            const trainings = activities.filter(a => a.type === 'training' && a.status === 'Realizada');
+            const otherActivities = activities.filter(a => a.type === 'other' && a.status === 'Realizada'); 
+            const projectGrouping = {};
+            
+            projectUpdates.forEach(pu => {
+                const id = pu.projectId || 'sin-proyecto';
+                const name = pu.projectName || 'Actividades Varias';
+                const isOtherActivity = name === 'Otras Actividades (Reporte Directo)'; 
+                if (!projectGrouping[id]) { projectGrouping[id] = { name: name, hours: 0, entries: [], isOtherActivity }; }
+                projectGrouping[id].hours += pu.duration;
+                projectGrouping[id].entries.push(pu);
+            });
+            
+            const totalHoursFromUpdates = Object.values(projectGrouping).reduce((sum, proj) => sum + proj.hours, 0);
+            const totalParticipants = trainings.reduce((sum, item) => sum + (item.participants || 0), 0);
+            
+            const totalOtherActivities = otherActivities.length;
+
+            const reportData = { dateStart, dateEnd, summary: { totalHours: totalHoursFromUpdates, totalVisits: visits.length, totalTrainings: trainings.length, totalParticipants: totalParticipants, totalOtherActivities: totalOtherActivities }, projectGrouping, detailedEntries: projectUpdates, visits, trainings, otherActivities };
+            
+            const html = `<div class="p-6"><div class="flex justify-between items-start mb-6 no-print"><div><h2 class="text-2xl font-bold text-slate-900 dark:text-slate-50">Reporte de Productividad</h2><p class="text-slate-500 dark:text-slate-400">${dateStart.toLocaleDateString('es-CO')} - ${dateEnd.toLocaleDateString('es-CO')}</p></div><button data-action="print-report" class="bg-slate-100 dark:bg-slate-800 p-2 rounded-md hover:bg-slate-200 dark:hover:bg-slate-700"><div class="w-5 h-5">${ICONS.printer}</div></button></div><div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6 text-center">
+                <div class="bg-blue-50 dark:bg-blue-900/50 p-4 rounded-lg"><p class="text-sm text-blue-600 dark:text-blue-400">Total Horas (Registradas)</p><p class="text-2xl font-bold">${totalHoursFromUpdates.toFixed(1)}h</p></div>
+                <div class="bg-green-50 dark:bg-green-900/50 p-4 rounded-lg"><p class="text-sm text-green-600 dark:text-green-400">Visitas Realizadas</p><p class="text-2xl font-bold">${visits.length}</p></div>
+                <div class="bg-indigo-50 dark:bg-indigo-900/50 p-4 rounded-lg"><p class="text-sm text-indigo-600 dark:text-indigo-400">Capacitaciones</p><p class="text-2xl font-bold">${trainings.length}</p></div>
+                <div class="bg-purple-50 dark:bg-purple-900/50 p-4 rounded-lg"><p class="text-sm text-purple-600 dark:text-purple-400">Personas Capacitadas</p><p class="text-2xl font-bold">${totalParticipants}</p></div>
+                <div class="bg-yellow-50 dark:bg-yellow-900/50 p-4 rounded-lg"><p class="text-sm text-yellow-600 dark:text-yellow-400">Otras Actividades</p><p class="text-2xl font-bold">${totalOtherActivities}</p></div>
+                </div>
+                <h3 class="font-semibold text-lg mt-6 mb-2">Desglose de Horas por Proyecto</h3>
+                ${Object.keys(projectGrouping).length === 0 ? '<p class="text-slate-500">No hay horas registradas en proyectos para este rango.</p>' : `<div class="divide-y divide-slate-200 dark:divide-slate-800">${Object.values(projectGrouping).sort((a, b) => b.hours - a.hours).map(proj => `<div class="py-3"><div class="flex justify-between items-center"><p class="font-medium ${proj.isOtherActivity ? 'text-purple-600 dark:text-purple-400' : ''}">${proj.name}</p><p class="text-lg font-bold">${proj.hours.toFixed(1)}h</p></div><ul class="text-sm text-slate-500 pl-4 list-disc mt-1">${proj.entries.map(entry => `<li>${entry.update || 'Actividad registrada'} (${entry.duration}h) - ${entry.date.toLocaleDateString('es-CO')}</li>`).join('')}</ul></div>`).join('')}</div>`}
+                <h3 class="font-semibold text-lg mt-8 mb-2">Detalle de Actividades Realizadas</h3>
+                ${(visits.length === 0 && trainings.length === 0 && otherActivities.length === 0) ? '<p class="text-slate-500">No hay actividades registradas en este rango.</p>' : `<div class="divide-y divide-slate-200 dark:divide-slate-800">${[...visits, ...trainings, ...otherActivities].sort((a,b) => a.date - b.date).map(act => `<div class="py-3"><p class="font-medium">${act.type === 'visit' ? '(Visita)' : (act.type === 'training' ? '(Capacitación)' : '(Otras Actividades)')} ${act.name}</p>
+                <p class="text-sm text-slate-500">${act.date.toLocaleDateString('es-CO')} - ${act.duration}h${act.type === 'training' ? ` - ${act.participants} asistentes` : ''}${act.type === 'other' ? ` - Notas: ${act.notes || 'N/A'}` : ''}</p>
+                </div>`).join('')}</div>`}</div>`;
+            return { html, reportData };
+        };
+
+        const exportReportToExcel = (reportData) => {
+            try { 
+                const wb = XLSX.utils.book_new();
+                const { summary, visits, trainings, otherActivities, projectGrouping, dateStart, dateEnd } = reportData;
+                // Hoja 1: Resumen
+                const summaryData = [["Reporte de Productividad", ""], ["Usuario", state.user.displayName || state.user.email], ["Rango", `${dateStart.toLocaleDateString('es-CO')} - ${dateEnd.toLocaleDateString('es-CO')}`], [], ["Métrica", "Valor"], ["Total Horas Registradas", summary.totalHours.toFixed(1)], ["Visitas Realizadas", summary.totalVisits], ["Capacitaciones Realizadas", summary.totalTrainings], ["Personas Capacitadas", summary.totalParticipants], ["Otras Actividades (Total)", summary.totalOtherActivities]];
+                const ws1 = XLSX.utils.aoa_to_sheet(summaryData);
+                ws1['!cols'] = [{ wch: 25 }, { wch: 20 }];
+                XLSX.utils.book_append_sheet(wb, ws1, "Resumen");
+                // Hoja 2: Visitas
+                const visitsData = visits.sort((a,b) => a.date - b.date).map(v => ({ "Fecha": v.date.toLocaleDateString('es-CO'), "Hora": v.time || '', "Tienda": v.name, "Duración (h)": v.duration || 0 }));
+                const ws2 = XLSX.utils.json_to_sheet(visitsData, { header: ["Fecha", "Hora", "Tienda", "Duración (h)"] });
+                ws2['!cols'] = [{ wch: 12 }, { wch: 10 }, { wch: 40 }, { wch: 12 }];
+                XLSX.utils.book_append_sheet(wb, ws2, "Visitas");
+                // Hoja 3: Capacitaciones
+                const trainingsData = trainings.sort((a,b) => a.date - b.date).map(t => ({ "Fecha": t.date.toLocaleDateString('es-CO'), "Hora": t.time || '', "Capacitación": t.name, "Tipo": t.trainingType || 'N/A', "Duración (h)": t.duration || 0, "Asistentes": t.participants || 0 }));
+                const ws3 = XLSX.utils.json_to_sheet(trainingsData, { header: ["Fecha", "Hora", "Capacitación", "Tipo", "Duración (h)", "Asistentes"] });
+                ws3['!cols'] = [{ wch: 12 }, { wch: 10 }, { wch: 40 }, { wch: 15 }, { wch: 12 }, { wch: 12 }];
+                XLSX.utils.book_append_sheet(wb, ws3, "Capacitaciones");
+
+                // Hoja 5: Otras Actividades
+                const otherData = otherActivities.sort((a,b) => a.date - b.date).map(o => ({ "Fecha": o.date.toLocaleDateString('es-CO'), "Actividad": o.name, "Duración (h)": o.duration || 0, "Comentarios": o.notes || 'N/A' }));
+                const ws5 = XLSX.utils.json_to_sheet(otherData, { header: ["Fecha", "Actividad", "Duración (h)", "Comentarios"] });
+                ws5['!cols'] = [{ wch: 12 }, { wch: 40 }, { wch: 12 }, { wch: 60 }];
+                XLSX.utils.book_append_sheet(wb, ws5, "Otras Actividades");
+            
+                // Hoja 4: Horas por Proyecto (Incluye "Otras Actividades (Reporte Directo)")
+                const projectData = [["Proyecto", "Fecha", "Descripción de Tarea", "Horas"]];
+                Object.values(projectGrouping).sort((a,b) => b.hours - a.hours).forEach(proj => {
+                    projectData.push([proj.name, "", "", proj.hours.toFixed(1)]); // Total
+                    proj.entries.sort((a,b) => a.date - b.date).forEach(entry => { projectData.push(["", entry.date.toLocaleDateString('es-CO'), entry.update || 'Actividad registrada', entry.duration || 0]); });
+                    projectData.push([]); // Separador
+                });
+                const ws4 = XLSX.utils.aoa_to_sheet(projectData);
+                ws4['!cols'] = [{ wch: 30 }, { wch: 12 }, { wch: 50 }, { wch: 10 }];
+                XLSX.utils.book_append_sheet(wb, ws4, "Horas por Proyecto");
+                // Descargar
+                XLSX.writeFile(wb, `Reporte_KrediYA_${dateStart.toISOString().split('T')[0]}.xlsx`);
+            } catch (error) { console.error("Error al exportar Excel:", error); showToast("Error al generar el archivo Excel. Revisa la consola."); }
+        };
+        
+        // ====================================================================================
+        // INICIO DE LA APLICACIÓN Y FIREBASE 
+        // ====================================================================================
+        
+        firebase.initializeApp(firebaseConfig);
+        db = firebase.firestore();
+        auth = firebase.auth();
+        
+        // Muestra la pantalla de carga inmediatamente
+        render(); 
+
+        const upsertUserDocument = async (user) => {
+            if (!user) return;
+            const userRef = db.collection('users').doc(user.uid);
+            const userDoc = await userRef.get();
+            const userData = { uid: user.uid, email: user.email, displayName: user.displayName || user.email.split('@')[0], photoURL: user.photoURL || null, lastLogin: new Date() };
+            if (!userDoc.exists) { await userRef.set(userData); } 
+            else { await userRef.update({ displayName: userData.displayName, photoURL: userData.photoURL, lastLogin: userData.lastLogin }); }
+            return userData;
+        };
+
+        const fetchData = (uid) => {
+            state.loading = true;
+            render();
+            const parseDoc = (doc) => ({ id: doc.id, ...doc.data(), ...(doc.data().date && { date: doc.data().date.toDate() }) });
+
+            const usersUnsub = db.collection('users').onSnapshot(snapshot => { state.allUsers = snapshot.docs.map(parseDoc); if (!state.loading) render(); }, (error) => console.error("Error fetching users:", error));
+            const projectsUnsub = db.collection(`users/${uid}/projects`).onSnapshot(snapshot => { state.activeProjects = snapshot.docs.map(parseDoc).sort((a,b) => (a.name > b.name) ? 1 : -1); if (!state.loading) render(); }, (error) => console.error("Error fetching projects:", error));
+            const activitiesUnsub = db.collection(`users/${uid}/activities`).onSnapshot(snapshot => { state.activities = snapshot.docs.map(parseDoc).sort((a,b) => a.date - b.date); if (!state.loading) render(); }, (error) => console.error("Error fetching activities:", error));
+            const updatesUnsub = db.collection(`users/${uid}/projectUpdates`).onSnapshot(snapshot => { state.projectUpdates = snapshot.docs.map(parseDoc).sort((a,b) => a.date - b.date); state.loading = false; render(); }, (error) => console.error("Error fetching project updates:", error));
+            
+            unsubscribers.push(projectsUnsub, activitiesUnsub, updatesUnsub, usersUnsub);
+        };
+        
+        auth.onAuthStateChanged(async (user) => {
+            unsubscribers.forEach(unsub => unsub());
+            unsubscribers = [];
+            if (user) {
+                const syncedUser = await upsertUserDocument(user);
+                state.user = { ...user, ...syncedUser }; 
+                userId = user.uid; 
+                fetchData(user.uid); 
+            } else {
+                state.user = null; 
+                state.loading = false;
+                state.allUsers = []; state.activeProjects = []; state.activities = []; state.projectUpdates = [];
+                render(); 
+            }
+        });
+        
+        setInterval(updateClock, 1000); // Iniciar reloj
+
+    })();
+    </script>
+</body>
+</html>
